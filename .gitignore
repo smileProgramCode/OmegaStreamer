@@ -1,0 +1,34 @@
+# 编辑器相关（重点）
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store       # macOS 系统文件
+Thumbs.db       # Windows 系统文件
+
+# Git 本身的文件（避免误提交）
+.git/
+
+# 日志文件
+logs/
+*.log
+
+# 临时文件
+tmp/
+temp/
+
+# Node.js 项目（按需保留，非通用）
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python 项目（按需保留，非通用）
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+
+# Java 项目（按需保留，非通用）
+target/
+*.class
