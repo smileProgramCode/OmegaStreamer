@@ -20,9 +20,3 @@ namespace tms {
 #define LOG_INFO(...)     SPDLOG_INFO(__VA_ARGS__)
 #define LOG_WARN(...)     SPDLOG_WARN(__VA_ARGS__)
 #define LOG_ERROR(...)    SPDLOG_ERROR(__VA_ARGS__)
-
-#define NET_TRACE(...)    SPDLOG_TRACE("[net] " __VA_ARGS__)
-#define NET_DEBUG(...)    SPDLOG_DEBUG("[net] " __VA_ARGS__)
-#define NET_INFO(...)     SPDLOG_INFO("[net] " __VA_ARGS__)
-#define NET_WARN(...)     SPDLOG_WARN("[net] " __VA_ARGS__)
-#define NET_ERROR(...)    SPDLOG_ERROR("[net] " __VA_ARGS__)

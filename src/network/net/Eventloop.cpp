@@ -3,7 +3,7 @@
 //
 
 #include "Eventloop.h"
-#include "../../base/Logger.h"
+#include "../base/NetworkLog.h"
 
 using namespace tms::network;
 
@@ -47,7 +47,24 @@ void Eventloop::RunAfter(double delay, const Func& cb) {
         if (!ec) {
             cb();
         } else {
-
+            NETWORK_ERROR("asio time async wait failed!!");
         }
     });
+}
+
+void Eventloop::RunEvery(double interval, const Func& cb) {
+    auto timer = std::make_shared<asio::steady_timer>(m_io_ctx);
+    auto ms = std::chrono::milliseconds(static_cast<int64_t>(interval * 1000));
+
+    std::function<void(asio::error_code)> on_timer;
+    on_timer = [timer, cb, ms, &on_timer_ref=on_timer](asio::error_code ec)
+    {
+        if (!ec) {
+            cb();
+            timer->expires_after(ms);
+            timer->async_wait(on_timer_ref);
+        }
+    };
+    timer->expires_after(ms);
+    timer->async_wait(on_timer);
 }
