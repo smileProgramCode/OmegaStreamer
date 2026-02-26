@@ -3,10 +3,12 @@
 //
 
 #include "TcpConnection.h"
+#include "network/base/NetworkLog.h"
+#include <sstream>
 
-namespace tms
-{
-    namespace network
-    {
-    } // network
-} // tms
+using namespace tms::network;
+
+TcpConnection::TcpConnection(Eventloop* loop, asio::ip::tcp::socket socket)
+    : m_loop(loop), m_socket(std::move(socket)) {
+}
+

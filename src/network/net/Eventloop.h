@@ -3,7 +3,7 @@
 //
 
 #pragma once
-#include "../../base/NonCopyable.h"
+#include "base/NonCopyable.h"
 #include <asio.hpp>
 #include <thread>
 #include <functional>

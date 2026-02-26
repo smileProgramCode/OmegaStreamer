@@ -3,13 +3,26 @@
 //
 
 #pragma once
+#include "Eventloop.h"
 
 namespace tms
 {
     namespace network
     {
-        class EventLoopThread
-        {
+        class EventLoopThread : public base::NonCopyable {
+        public:
+            EventLoopThread() = default;
+            virtual ~EventLoopThread();
+
+            Eventloop* start();
+            Eventloop* GetLoop() { return m_loop.get(); }
+
+        private:
+            void threadFunc();
+            std::unique_ptr<Eventloop> m_loop = nullptr;
+            std::thread m_thread;
+            std::mutex m_mutex;
+            std::condition_variable m_cond;
         };
     } // network
 } // tms
