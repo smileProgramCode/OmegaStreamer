@@ -3,7 +3,7 @@
 //
 
 #pragma once
-#include "../../base/Logger.h"
+#include "base/Logger.h"
 
 #define RTMP_TRACE(...)   SPDLOG_TRACE("[rtmp] " __VA_ARGS__)
 #define RTMP_DEBUG(...)   SPDLOG_DEBUG("[rtmp] " __VA_ARGS__)
