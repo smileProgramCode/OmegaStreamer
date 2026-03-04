@@ -28,10 +28,10 @@ void EventLoopThreadPool::stop() {
 }
 
 Eventloop* EventLoopThreadPool::GetNextLoop() {
-    if (m_loops.empty()) return m_base_loop.get();
+    if (m_loops.empty()) return m_base_loop;
     size_t current = m_next.fetch_add(1) % m_loops.size();
     if (m_next.load() > 1000000) {
         m_next.store(0);
     }
-    return m_loops[current].get();
+    return m_loops[current];
 }

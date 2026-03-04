@@ -15,11 +15,11 @@ namespace tms
             virtual ~EventLoopThread();
 
             Eventloop* start();
-            Eventloop* GetLoop() { return m_loop.get(); }
+            Eventloop* GetLoop() { return m_loop; }
 
         private:
             void threadFunc();
-            std::unique_ptr<Eventloop> m_loop = nullptr;
+            Eventloop* m_loop = nullptr;
             std::thread m_thread;
             std::mutex m_mutex;
             std::condition_variable m_cond;

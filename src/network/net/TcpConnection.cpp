@@ -35,6 +35,16 @@ void TcpConnection::Send(const std::string& data) {
     Send(data.data(), data.size());
 }
 
+void TcpConnection::Send(const char* data, size_t len) {
+    auto buf = std::make_shared<std::string>(data, len);
+    auto self = shared_from_this();
+    m_loop->RunInLoop([this, self, buf]() {
+        bool was_empty = m_write_queue.empty();
+        m_write_queue.push_back(buf);
+        if (was_empty && !m_writing) doWrite();
+    });
+}
+
 std::string TcpConnection::PeerAddr() const {
     try {
         auto ep = m_socket.remote_endpoint();

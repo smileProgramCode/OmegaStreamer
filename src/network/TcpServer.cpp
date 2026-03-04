@@ -9,7 +9,9 @@ using namespace tms::network;
 using asio::ip::tcp;
 
 TcpServer::TcpServer(Eventloop* loop, uint16_t port)
-    : m_base_loop(loop), m_port(port) {
+    : m_base_loop(loop), m_port(port)
+    , m_acceptor(loop->IoContext(), tcp::endpoint(tcp::v4(), port)){
+    m_acceptor.set_option(tcp::acceptor::reuse_address(true));
 }
 
 void TcpServer::Start() {
@@ -34,7 +36,7 @@ void TcpServer::doAccept() {
                 if (m_new_conn_cb) m_new_conn_cb(conn);
                 conn->Start();
             } else {
-                NET_ERROR("accept error: {}", ec.message());
+                NETWORK_ERROR("accept error: {}", ec.message());
             }
             doAccept();
         });

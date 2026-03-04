@@ -40,7 +40,8 @@ namespace tms
             void Start();
             int32_t HandShake(MsgBuffer& buf);
             void WriteComplete();
-            int32_t State() const {  }
+            int32_t State() const { return m_state; }
+            bool IsDone() const { return m_state == kHandShakeDone; }
         private:
             uint8_t GenRandom();
             void CreateC1S1();
@@ -58,5 +59,7 @@ namespace tms
             uint8_t m_C2S2[kRtmpHandShakePacketSize]{};
             int32_t m_state{kHandShakeInit};
         };
+
+        using RtmpHandShakePtr = std::shared_ptr<RtmpHandShake>;
     } // media
 } // tms

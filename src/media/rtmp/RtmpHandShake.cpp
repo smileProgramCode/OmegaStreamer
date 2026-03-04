@@ -84,7 +84,7 @@ RtmpHandShake::RtmpHandShake(const TcpConnectionPtr& conn, bool client)
 void RtmpHandShake::Start() {
     CreateC1S1();
     if (m_is_client) { m_state = kHandShakePostC0C1; SendC1S1(); }
-    else { m_state = kHandShakePostC0C1; }
+    else { m_state = kHandShakeWaitC0C1; }
 }
 
 uint8_t RtmpHandShake::GenRandom()

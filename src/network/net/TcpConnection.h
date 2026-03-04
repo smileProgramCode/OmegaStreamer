@@ -24,7 +24,7 @@ namespace tms
             using CloseCallback = std::function<void(const TcpConnectionPtr&)>;
             using WriteCompleteCallback = std::function<void(const TcpConnectionPtr&)>;
 
-            TcpConnection(std::unique_ptr<Eventloop> loop, asio::ip::tcp::socket socket);
+            TcpConnection(Eventloop* loop, asio::ip::tcp::socket socket);
             virtual ~TcpConnection();
             void Start();
             void Close();
@@ -36,7 +36,7 @@ namespace tms
             void SetWriteCompleteCallback(WriteCompleteCallback cb) { m_write_complete_cb = std::move(cb); }
 
             std::string PeerAddr() const;
-            Eventloop* GetLoop() { return m_loop.get(); }
+            Eventloop* GetLoop() { return m_loop; }
 
         private:
             void doRead();
