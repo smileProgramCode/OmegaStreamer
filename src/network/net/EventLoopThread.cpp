@@ -17,7 +17,7 @@ EventLoopThread::~EventLoopThread() {
 Eventloop* EventLoopThread::start() {
     m_thread = std::thread([this](){ threadFunc(); });
     std::unique_lock<std::mutex> lock(m_mutex);
-    m_cond.wait(lock, [this]() { return !m_loop; });
+    m_cond.wait(lock, [this]() { return m_loop != nullptr; });
     return m_loop;
 }
 
