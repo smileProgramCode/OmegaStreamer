@@ -85,11 +85,14 @@ namespace tms
         /// 最大 Chunk Size（协议允许的上限）
         static constexpr int kMaxChunkSize = 65535;
 
+        /// Extended Timestamp 阈值
+        static constexpr uint32_t kMaxTimestampInHeader = 0xFFFFFF;
+
         // ─── fmt 类型 ───
         static constexpr uint8_t kChunkFmt0 = 0; // 11 字节 Message Header
-        static constexpr uint8_t kChunkFmt0 = 1; // 7  字节
-        static constexpr uint8_t kChunkFmt0 = 2; // 3  字节
-        static constexpr uint8_t kChunkFmt0 = 3; // 0  字节
+        static constexpr uint8_t kChunkFmt1 = 1; // 7  字节
+        static constexpr uint8_t kChunkFmt2 = 2; // 3  字节
+        static constexpr uint8_t kChunkFmt3 = 3; // 0  字节
 
         // ─── Message Header 长度（按 fmt 索引）───
         static constexpr int kMsgHeaderSize[] = {11, 7, 3, 0};
@@ -154,7 +157,7 @@ namespace tms
             }
         };
 
-        using RtmpMessagePtr = std::unique_ptr<RtmpMessage>;
+        using RtmpMessagePtr = std::shared_ptr<RtmpMessage>;
 
         inline const char* MsgTypeName(uint8_t type)
         {

@@ -19,6 +19,14 @@ namespace tms {
                 return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) |
                        (uint32_t(p[2]) << 8)  |  uint32_t(p[3]);
             }
+
+            /// 小端序读取（RTMP 的 msg_stream_id 是唯一的小端字段）
+            static uint32_t ReadUint32LE(const uint8_t* p) {
+                return  uint32_t(p[0])        |
+                       (uint32_t(p[1]) << 8)  |
+                       (uint32_t(p[2]) << 16) |
+                       (uint32_t(p[3]) << 24);
+            }
         };
     }
 }
