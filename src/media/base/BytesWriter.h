@@ -19,6 +19,14 @@ namespace tms {
                 p[0] = (val >> 24) & 0xFF; p[1] = (val >> 16) & 0xFF;
                 p[2] = (val >> 8)  & 0xFF; p[3] =  val        & 0xFF;
             }
+
+            /// 小端序写入（RTMP 的 msg_stream_id 是小端）
+            static void WriteUint32LE(uint8_t* p, uint32_t val) {
+                p[0] =  val        & 0xFF;
+                p[1] = (val >> 8)  & 0xFF;
+                p[2] = (val >> 16) & 0xFF;
+                p[3] = (val >> 24) & 0xFF;
+            }
         };
     }
 }

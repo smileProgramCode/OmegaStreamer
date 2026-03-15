@@ -85,5 +85,3 @@ namespace tms
         };
     } // media
 } // tms
-
-#endif //TMS_RTMPCHUNKPARSE_H

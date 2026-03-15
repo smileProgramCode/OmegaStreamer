@@ -3,6 +3,9 @@
 //
 
 #include "RtmpContext.h"
+
+#include "media/base/BytesReader.h"
+#include "media/base/BytesWriter.h"
 #include "media/base/MediaLog.h"
 
 using namespace tms::media;
@@ -155,3 +158,111 @@ void RtmpContext::handleMessage(RtmpMessagePtr msg)
 // │  有效范围: 1 ~ 0x7FFFFFFF         │
 // └──────────────────────────────────┘
 //
+
+void RtmpContext::handleSetChunkSize(RtmpMessagePtr msg) {
+    if (msg->payload.size() < 4) return;
+
+    uint32_t new_size = BytesReader::ReadUint32BE(
+        reinterpret_cast<const uint8_t*>(msg->payload.data()));
+    new_size &= 0x7FFFFFFF;
+
+    if (new_size == 0 || new_size > kMaxChunkSize) {
+        RTMP_WARN("无效的 ChunkSize: {}, 忽略", new_size);
+        return;
+    }
+
+    RTMP_INFO("对方设置 ChunkSize: {} -> {}", m_chunk_parse.GetInChunkSize(), new_size);
+    m_chunk_parse.SetInChunkSize(new_size);
+}
+
+// ─── WindowAckSize ───
+void RtmpContext::handleWindowAckSize(RtmpMessagePtr msg) {
+    if (msg->payload.size() < 4) return;
+    uint32_t size = BytesReader::ReadUint32BE(
+        reinterpret_cast<const uint8_t*>(msg->payload.data()));
+    RTMP_INFO("对方设置 WindowAckSize: {}", size);
+}
+
+// ─── PeerBandwidth ───
+void RtmpContext::handlePeerBandwidth(RtmpMessagePtr msg) {
+    if (msg->payload.size() < 5) return;
+    uint32_t bw = BytesReader::ReadUint32BE(
+        reinterpret_cast<const uint8_t *>(msg->payload.data()));
+    uint8_t limit = msg->payload[4];
+    RTMP_INFO("对方设置 PeerBandwidth: {}, limit_type={}", bw, limit);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  发送协议控制消息
+// ═══════════════════════════════════════════════════════════
+
+void RtmpContext::sendSetChunkSize(int chunk_size) {
+    uint8_t payload[4];
+    BytesWriter::WriteUint32BE(payload, chunk_size);
+    sendChunk(kChunkCsidControl, kMsgTypeSetChunkSize, 0,
+        reinterpret_cast<const char *>(payload), 4);
+    RTMP_INFO("发送 SetChunkSize: {}", chunk_size);
+}
+
+void RtmpContext::sendWindowAckSize(int ack_size) {
+    uint8_t payload[4];
+    BytesWriter::WriteUint32BE(payload, ack_size);
+    sendChunk(kChunkCsidControl, kMsgTypeWindowAckSize, 0,
+                    reinterpret_cast<const char *>(payload), 4);
+    RTMP_INFO("发送 WindowAckSize: {}", ack_size);
+}
+
+void RtmpContext::sendPeerBandwidth(int size, uint8_t limit_type) {
+    uint8_t payload[5];
+    BytesWriter::WriteUint32BE(payload, size);
+    payload[4] = limit_type;
+    sendChunk(kChunkCsidControl, kMsgTypePeerBandwidth, 0,
+                reinterpret_cast<const char *>(payload), 5);
+    RTMP_INFO("发送 PeerBandwidth: {}, limit={}", size, limit_type);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  sendChunk —— 用 fmt=0 构造并发送一个 Chunk
+// ═══════════════════════════════════════════════════════════
+//
+//  目前只用于发送小的协议控制消息（4~5 字节）
+//  不需要分片（数据 < chunk_size）
+//  后续课程会扩展为支持大消息的分片发送
+//
+//  发送格式：
+//  ┌──────────────┬────────────────────────┬────────────┐
+//  │ Basic Header │ Message Header (fmt=0) │ Data       │
+//  │ 1 字节       │ 11 字节                │ len 字节   │
+//  └──────────────┴────────────────────────┴────────────┘
+//
+
+void RtmpContext::sendChunk(int csid, uint8_t msg_type,
+                            uint32_t msg_stream_id,
+                            const char *data, int len) {
+    // Basic Header (1 字节, 假设 csid <= 63)
+    // + Message Header (11 字节, fmt=0)
+    // = 12 字节头
+
+    uint8_t header[12];
+
+    // Basic Header: fmt=0, csid
+    header[0] = (kChunkFmt0 << 6) | (csid & 0x3F);
+
+    // Message Header (fmt=0, 11 字节)：
+    // timestamp (3B) = 0
+    BytesWriter::WriteUint24BE(header + 1, 0);
+    // msg_len (3B)
+    BytesWriter::WriteUint24BE(header + 4, len);
+    // msg_type (1B)
+    header[7] = msg_type;
+    // msg_stream_id (4B, 小端序!)
+    BytesWriter::WriteUint32LE(header + 8, msg_stream_id);
+
+    // 发送 header + data
+    std::string packet;
+    packet.append(reinterpret_cast<const char *>(header), 12);
+    packet.append(data, len);
+
+    m_connection->Send(packet);
+}
+
