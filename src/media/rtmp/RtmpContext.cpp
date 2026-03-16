@@ -4,6 +4,7 @@
 
 #include "RtmpContext.h"
 
+#include "AMF/AMF0.h"
 #include "media/base/BytesReader.h"
 #include "media/base/BytesWriter.h"
 #include "media/base/MediaLog.h"
@@ -123,7 +124,7 @@ void RtmpContext::handleMessage(RtmpMessagePtr msg)
             break;
         case kMsgTypeAMF0Command:
             RTMP_INFO("收到 AMF0 命令, len={}", msg->header.msg_len);
-            // TODO: 第4课 AMF0 解码 → 处理 connect / createStream / publish / play
+            handleAMF0Command(msg);
             break;
         case kMsgTypeAMF0Data:
             RTMP_INFO("收到 AMF0 数据, len={}", msg->header.msg_len);
@@ -143,6 +144,42 @@ void RtmpContext::handleMessage(RtmpMessagePtr msg)
                    MsgTypeName(msg->header.msg_type));
             break;
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  AMF0 命令处理
+// ═══════════════════════════════════════════════════════════
+//
+//  AMF0 命令消息的通用格式：
+//    AMF0 String   命令名 ("connect", "createStream", "publish", ...)
+//    AMF0 Number   事务ID (transaction id)
+//    AMF0 ...      后续参数（因命令而异）
+//
+//  事务ID 的作用：
+//    客户端发 connect (txn=1)
+//    服务端回 _result (txn=1)  ← 客户端靠 txn=1 知道这是 connect 的回复
+//
+void RtmpContext::handleAMF0Command(RtmpMessagePtr msg) {
+    AMF0Decoder decoder(
+        reinterpret_cast<const uint8_t*>(msg->payload.data()),
+        msg->payload.size());
+    // 第1个值：命令名 (string)
+    AMF0Value cmd_val = decoder.Decode();
+    auto* cmd_name = std::get_if<std::string>(&cmd_val);
+    if (!cmd_name) {
+        RTMP_WARN("AMF0 命令名不是 String");
+        return;
+    }
+
+    // 第2个值: 事务ID （number）
+    AMF0Value txn_val = decoder.Decode();
+    auto* txn_id =std::get_if<double>(&txn_val);
+    if (!txn_id) {
+        RTMP_WARN("AMF0 事务ID不是 Number");
+        return;
+    }
+
+    RTMP_INFO("");
 }
 
 // ═══════════════════════════════════════════════════════════

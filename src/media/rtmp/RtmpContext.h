@@ -41,6 +41,12 @@ namespace tms
             void sendWindowAckSize(int size);
             void sendPeerBandwidth(int size, uint8_t limit_type);
 
+            // ─── AMF0 命令处理 ───
+            void handleAMF0Command(RtmpMessagePtr msg);
+            void handleConnect(double txn_id, const std::string& app);
+            void handleCreateStream(double txn_id);
+
+
             /// 构造并发送一个 Chunk（fmt=0, 用于协议控制消息）
             void sendChunk(int csid, uint8_t msg_type, uint32_t msg_stream_id, const char* data, int len);
         private:
@@ -49,6 +55,9 @@ namespace tms
             RtmpChunkParse m_chunk_parse;
 
             int m_out_chunk_size{kDefaultChunkSize};
+            std::string m_app;            // 客户端请求的 app 名（如 "live"）
+            std::string m_tc_url;         // 客户端请求的 tcUrl
+            uint32_t m_next_stream_id{0}; // 分配给 createStream 的 ID
         };
 
         using RtmpContextPtr = std::shared_ptr<RtmpContext>;

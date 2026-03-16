@@ -142,31 +142,156 @@ AMF0Value AMF0Decoder::Decode() {
 //  ↑  ↑─────────────────────↑
 //  标记  double 的 8 字节
 //
+double AMF0Decoder::DecodeNumber() {
+    return readDouble();
+}
 
+// ─── Boolean: 1 字节 ───
+bool AMF0Decoder::DecodeBoolean() {
+    return readUint8() != 0;
+}
 
+// ─── String: 2字节长度 + UTF-8 数据 ───
+//
+//  内存布局:
+//  [0x02] [长度 2B 大端] [UTF-8 data]
+//
+//  例如 "live":
+//  02 00 04 6C 69 76 65
+//  ↑  ↑──↑  ↑─────────↑
+//  标记 长度4  "live"
+//
+std::string AMF0Decoder::DecodeString() {
+    uint16_t len = readUint16BE();
+    return readStringData(len);
+}
 
+// ─── Object: 键值对列表 ───
+//
+//  内存布局:
+//  [0x03]                          Object 开始标记
+//  [key_len 2B] [key] [value]      第1个键值对
+//  [key_len 2B] [key] [value]      第2个键值对
+//  ...
+//  [00 00 09]                      Object 结束标记
+//
+//  注意：key 没有类型标记！直接是 [长度][UTF-8]
+//  value 有类型标记（正常的 AMF0 值）
+//
+std::shared_ptr<AMF0Object> AMF0Decoder::DecodeObject() {
+    auto obj = std::make_shared<AMF0Object>();
 
+    while (m_pos < m_len) {
+        std::string key = readObjectKey();
 
+        if (key.empty() && m_pos < m_len && m_data[m_pos] == kAMF0ObjectEnd) {
+            m_pos++;
+            break;
+        }
 
+        AMF0Value val = Decode();
+        obj->properties.emplace_back(std::move(key), std::move(val));
+    }
 
+    return obj;
+}
 
+// ─── ECMAArray: 带计数的键值对列表 ───
+//
+//  和 Object 几乎一样，只是前面多了 4 字节的计数
+//  但计数不可靠（有些客户端会填 0），所以还是靠结束标记判断
+//
+//  内存布局:
+//  [0x08] [count 4B] [key-value pairs...] [00 00 09]
+//
+std::shared_ptr<AMF0Object> AMF0Decoder::DecodeECAArray() {
+    readUint32BE(); // 跳过 count（不可靠）
+    return DecodeObject(); // 后面格式和 Object 一样
+}
 
+// ═══════════════════════════════════════════════════════════
+//  AMF0Encoder —— 编码
+// ═══════════════════════════════════════════════════════════
+void AMF0Encoder::writeUint8(uint8_t val) {
+    m_buf.push_back(static_cast<char>(val));
+}
 
+void AMF0Encoder::writeUint16BE(uint16_t val) {
+    m_buf.push_back(static_cast<char>((val >> 8) & 0xFF));
+    m_buf.push_back(static_cast<char>(val & 0xFF));
+}
 
+void AMF0Encoder::writeUint32BE(uint32_t val) {
+    m_buf.push_back(static_cast<char>((val >> 24) & 0xFF));
+    m_buf.push_back(static_cast<char>((val >> 16) & 0xFF));
+    m_buf.push_back(static_cast<char>((val >> 8) & 0xFF));
+    m_buf.push_back(static_cast<char>(val & 0xFF));
+}
 
+// ─── 写入大端序 double ───
+void AMF0Encoder::writeDouble(double val) {
+    uint8_t bytes[8];
+    std::memcpy(bytes, &val, 8);
+    for (int i = 7; i >= 0; i--) {
+        m_buf.push_back(static_cast<char>(bytes[i]));
+    }
+}
 
+// ─── 写入不带类型标记的字符串数据 ───
+void AMF0Encoder::writeStringData(const std::string &val) {
+    writeUint16BE(static_cast<uint16_t>(val.size()));
+    m_buf.append(val);
+}
 
+void AMF0Encoder::EncodeNumber(double val) {
+    writeUint8(kAMF0Number);
+    writeDouble(val);
+}
 
+void AMF0Encoder::EncodeBoolean(bool val) {
+    writeUint8(kAMF0Boolean);
+    writeUint8(val ? 1 : 0);
+}
 
+void AMF0Encoder::EncodeString(const std::string &val) {
+    writeUint8(kAMF0String);
+    writeStringData(val);
+}
 
+void AMF0Encoder::EncodeNull() {
+    writeUint8(kAMF0Null);
+}
 
+void AMF0Encoder::EncodeObjectEnd() {
+    writeUint16BE(0); // key 长度 = 0
+    writeUint8(kAMF0ObjectEnd); // 0x09
+}
 
+// ─── 编码 Object 的命名属性 ───
+//
+//  Object 里的键值对格式：
+//  [key_len 2B] [key UTF-8] [value (带类型标记)]
+//
 
+void AMF0Encoder::EncodeNamedString(const std::string &name, const std::string &val) {
+    writeStringData(name);
+    EncodeString(val);
+}
 
+void AMF0Encoder::EncodeNamedNumber(const std::string &name, double val) {
+    writeStringData(name);
+    EncodeNumber(val);
+}
 
+void AMF0Encoder::EncodeNamedBoolean(const std::string &name, bool val) {
+    writeStringData(name);
+    EncodeBoolean(val);
+}
 
-
-
+void AMF0Encoder::EncodeECMAArrayStart(uint32_t count) {
+    writeUint8(kAMF0ECMAArray);
+    writeUint32BE(count);
+}
 
 
 
