@@ -87,6 +87,7 @@ double AMF0Decoder::readDouble() {
     }
     double val;
     std::memcpy(&val, bytes, 8);
+    m_pos += 8;
     return val;
 }
 
@@ -107,7 +108,7 @@ std::string AMF0Decoder::readStringData(uint16_t len) {
 // 和 String 类型不同：String 有 0x02 标记，key 没有
 //
 
-std::string AMF0Decoder::readStringData() {
+std::string AMF0Decoder::readObjectKey() {
     uint16_t len = readUint16BE();
     return readStringData(len);
 }
@@ -126,6 +127,10 @@ AMF0Value AMF0Decoder::Decode() {
         case kAMF0ECMAArray:   return DecodeECAArray();
         case kAMF0Null:        return nullptr;
         case kAMF0Undefined:   return nullptr;
+        case 0x3F: {
+             m_pos = m_len;
+             return nullptr;
+        }
         default:
             RTMP_WARN("未知的 AMF0 类型： 0x{:02x}, pos={}", marker, m_pos);
             return nullptr;
@@ -260,6 +265,10 @@ void AMF0Encoder::EncodeString(const std::string &val) {
 
 void AMF0Encoder::EncodeNull() {
     writeUint8(kAMF0Null);
+}
+
+void AMF0Encoder::EncodeObjectStart() {
+    writeUint8(kAMF0Object);
 }
 
 void AMF0Encoder::EncodeObjectEnd() {

@@ -121,6 +121,9 @@ namespace tms {
             void EncodeNamedBoolean(const std::string& name, bool val);
             void EncodeECMAArrayStart(uint32_t count);
 
+            const std::string& Data() const { return m_buf; }
+            size_t Size() const { return m_buf.size(); }
+
         private:
             void writeUint8(uint8_t val);
             void writeUint16BE(uint16_t val);

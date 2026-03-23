@@ -179,8 +179,289 @@ void RtmpContext::handleAMF0Command(RtmpMessagePtr msg) {
         return;
     }
 
-    RTMP_INFO("");
+    RTMP_INFO("AMF0 命令: {} (txn={})", *cmd_name, *txn_id);
+
+    if (*cmd_name == "connect") {
+        // 第3个值: 命令参数(object)
+        AMF0Value obj_val = decoder.Decode();
+
+        auto *obj = std::get_if<std::shared_ptr<AMF0Object>>(&obj_val);
+        if (obj && *obj) {
+            m_app = (*obj)->GetString("app");
+            m_tc_url = (*obj)->GetString("tcUrl");
+        }
+
+        if (m_app.empty() && !m_tc_url.empty()) {
+            auto pos = m_tc_url.rfind('/');
+            if (pos != std::string::npos) {
+                m_app = m_tc_url.substr(pos + 1);
+            }
+        }
+
+        RTMP_INFO("connect: app={}, tcUrl={}", m_app, m_tc_url);
+        handleConnect(*txn_id, m_app);
+    } else if (*cmd_name == "createStream") {
+        handleCreateStream(*txn_id);
+    } else if (*cmd_name == "publish") {
+        // 第3个值:Null
+        decoder.Decode();
+        // 第4个值：流名称（string）
+        AMF0Value name_val = decoder.Decode();
+        auto *stream_name = std::get_if<std::string>(&name_val);
+        if (stream_name) {
+            RTMP_INFO("publish: stream={}", *stream_name);
+        }
+        // TODO: 第5课实现publish逻辑
+    } else if (*cmd_name == "play") {
+        decoder.Decode();
+        AMF0Value name_val = decoder.Decode();
+        auto *stream_name = std::get_if<std::string>(&name_val);
+        if (stream_name) {
+            RTMP_INFO("play: stream={}", *stream_name);
+        }
+        // TODO: 第5课实现play逻辑
+    } else if (*cmd_name == "deleteStream") {
+        RTMP_INFO("deleteStream");
+    } else if (*cmd_name == "FCPublish" || *cmd_name == "releaseStream") {
+        // OBS 会发这些，暂时忽略
+        RTMP_DEBUG("忽略命令: {}", *cmd_name);
+    } else {
+        RTMP_DEBUG("未处理命令: {}", *cmd_name);
+    }
+
 }
+
+// ═══════════════════════════════════════════════════════════
+//  handleConnect —— 处理 connect 命令
+// ═══════════════════════════════════════════════════════════
+//
+//  connect 是 RTMP 的第一个命令，客户端用它告诉服务端：
+//    "我要连接到 app='live' 这个应用"
+//
+//  服务端回复 _result 表示接受：
+//
+//  Client                         Server
+//    │── connect("live") ──────→│
+//    │                            │ 解析 connect 参数
+//    │←── _result ───────────── │ "连接成功"
+//    │                            │
+//    │── createStream ─────────→│ 下一步：创建流
+//
+//  _result 的格式：
+//    AMF0 String  "_result"
+//    AMF0 Number  txn_id (与 connect 的 txn_id 相同)
+//    AMF0 Object  { "fmsVer": "FMS/3,0,1,123", "capabilities": 31 }
+//    AMF0 Object  { "level": "status", "code": "NetConnection.Connect.Success",
+//                   "description": "Connection succeeded", "objectEncoding": 0 }
+//
+
+void RtmpContext::handleConnect(double txn_id, const std::string& app) {
+    RTMP_INFO("处理 connect: app={}, txn={}", app, txn_id);
+
+    AMF0Encoder enc;
+
+    //_result
+    enc.EncodeString("_result");
+    enc.EncodeNumber(txn_id);
+
+    // 第1个 Object: 服务器信息
+    enc.EncodeObjectStart();
+    enc.EncodeNamedString("fmsVer", "FMS/3,0,1,123");
+    enc.EncodeNamedNumber("capabilities", 31);
+    enc.EncodeObjectEnd();
+
+    // 第2个 Object: 连接状态
+    enc.EncodeObjectStart();
+    enc.EncodeNamedString("level", "status");
+    enc.EncodeNamedString("code", "NetConnection.Connect.Success");
+    enc.EncodeNamedString("description", "Connection successded");
+    enc.EncodeNamedNumber("objectEncoding", 0);
+    enc.EncodeObjectEnd();
+
+    sendChunk(kChunkCsidCommand, kMsgTypeAMF0Command, 0,
+        enc.Data().data(), enc.Size());
+    RTMP_INFO("已回复 _result (connect success)");
+}
+
+// ═══════════════════════════════════════════════════════════
+//  handleCreateStream —— 处理 createStream 命令
+// ═══════════════════════════════════════════════════════════
+//
+//  connect 成功后，客户端发 createStream 请求创建一个消息流
+//  服务端分配一个 stream_id 返回给客户端
+//
+//  Client                           Server
+//    │── createStream (txn=4) ───→│
+//    │←── _result (txn=4, id=1) ──│  分配 stream_id = 1
+//    │                              │
+//    │── publish (stream_id=1) ──→│  用这个 id 推流
+//
+
+void RtmpContext::handleCreateStream(double txn_id) {
+    uint32_t stream_id = m_next_stream_id++;
+
+    AMF0Encoder enc;
+    enc.EncodeString("_result");
+    enc.EncodeNumber(txn_id);
+    enc.EncodeNull();
+    enc.EncodeNumber(stream_id);
+
+    sendChunk(kChunkCsidCommand, kMsgTypeAMF0Command, 0,
+        enc.Data().data(), enc.Size());
+    RTMP_INFO("已回复 _result (createstream, stream_id={})", stream_id);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  handlePublish —— 处理推流请求（第5课核心）
+// ═══════════════════════════════════════════════════════════
+//
+//  OBS 发 publish 后，服务端需要：
+//    1. 发送 UserControl(StreamBegin) → 通知客户端"流已开始"
+//    2. 发送 onStatus(NetStream.Publish.Start) → 确认推流
+//    3. 之后 OBS 就开始发音视频数据了
+//
+//  时间线：
+//
+//  OBS                              Server
+//   │── publish("test","live") ──→│
+//   │                              │
+//   │←── UserControl(StreamBegin) ─│  "stream_id=1 的流开始了"
+//   │←── onStatus(Publish.Start) ──│  "推流已接受"
+//   │                              │
+//   │── @setDataFrame (metadata) ─→│  元数据（分辨率/帧率/码率等）
+//   │── 视频（关键帧 SPS/PPS）────→│  第一个视频包
+//   │── 音频（AAC header）────────→│  第一个音频包
+//   │── 视频 ─────────────────────→│  持续推流...
+//   │── 音频 ─────────────────────→│
+//   │── ...                        │
+//
+
+void RtmpContext::handlePublish(double txn_id, const std::string& stream_name, const std::string& stream_type) {
+    (void)txn_id;
+    m_stream_name = stream_name;
+    m_role = RtmpRole::kPublish;
+
+    RTMP_INFO("========================================");
+    RTMP_INFO("  推流开始");
+    RTMP_INFO("  app={}, stream={}, type={}", m_app, m_stream_name, stream_type);
+    RTMP_INFO("  peer={}", m_connection->PeerAddr());
+    RTMP_INFO("========================================");
+
+    // 1. 发送 UserControl - Stream Begin
+    sendUserControlStreamBegin(m_stream_id);
+
+    // 2. 发送 onStatus 确认推流
+    sendOnStatus(m_stream_id, "status",
+                "Netstream.Publish.Start",
+                "Start publishing");
+}
+
+// ═══════════════════════════════════════════════════════════
+//  handlePlay —— 处理播放请求（后续课程完善）
+// ═══════════════════════════════════════════════════════════
+
+void RtmpContext::handlePlay(double txn_id, const std::string& stream_name) {
+    (void)txn_id;
+    m_stream_name = stream_name;
+    m_role = RtmpRole::kPlayer;
+
+    RTMP_INFO("播放请求: app={}, stream={}", m_app, m_stream_name);
+
+
+    // TODO: 后续课程实现播放逻辑
+    sendUserControlStreamBegin(m_stream_id);
+    sendOnStatus(m_stream_id, "status",
+        "Netstream.Play.Start",
+        "Start playing");
+}
+
+// ═══════════════════════════════════════════════════════════
+//  handleAMF0Data —— 处理数据消息（@setDataFrame / onMetaData）
+// ═══════════════════════════════════════════════════════════
+//
+//  OBS 在发送音视频数据之前，会先发一条 AMF0 数据消息
+//  内容是流的元数据（metadata），包括：
+//    - 视频：宽度、高度、帧率、编码器、码率
+//    - 音频：采样率、声道数、编码器
+//
+//  格式：
+//    AMF0 String  "@setDataFrame"
+//    AMF0 String  "onMetaData"
+//    AMF0 Object/ECMAArray {
+//        "width": 1920,
+//        "height": 1080,
+//        "framerate": 30,
+//        "videocodecid": 7,        ← 7 = H.264
+//        "audiocodecid": 10,       ← 10 = AAC
+//        "audiosamplerate": 44100,
+//        ...
+//    }
+//
+
+void RtmpContext::handleAMF0Data(RtmpMessagePtr msg) {
+    AMF0Decoder decoder(
+        reinterpret_cast<const uint8_t*>(msg->payload.data()),
+        msg->payload.size());
+    AMF0Value first = decoder.Decode();
+    auto* first_str = std::get_if<std::string>(&first);
+    if (!first_str) return;
+
+    if (*first_str == "@setDataFrame") {
+        // 跳过"onMetaData"字符串
+        AMF0Value second = decoder.Decode();
+
+        // 第三个值: 元数据 Object 或 ECMAArray
+        AMF0Value meta_val = decoder.Decode();
+        auto* meta_obj = std::get_if<std::shared_ptr<AMF0Object>>(&meta_val);
+        if (meta_obj && *meta_obj) {
+            auto &meta = *meta_obj;
+            double width = meta->GetNumber("width");
+            double height = meta->GetNumber("height");
+            double fps = meta->GetNumber("framerate");
+            double video_bitrate = meta->GetNumber("videodatarate");
+            double audio_bitrate = meta->GetNumber("audiodatarate");
+            double sample_rate = meta->GetNumber("audiospmplerate");
+            std::string encoder = meta->GetString("encoder");
+
+            RTMP_INFO("========================================");
+            RTMP_INFO("  元数据(onMetaData)");
+            RTMP_INFO("  视频: {}x{}, {}fps, {}kbps",
+                (int)width, (int)height, (int)fps, (int)video_bitrate);
+            RTMP_INFO("  音频: {}Hz, {}kbps",
+                (int)sample_rate, (int)audio_bitrate);
+            if (!encoder.empty()) {
+                RTMP_INFO("  编码器: {}", encoder);
+            }
+            RTMP_INFO("========================================");
+        }
+    } else if (*first_str == "onMetaData") {
+        RTMP_INFO("收到onMetaData (无@setDataFrame 前缀)");
+    } else {
+        RTMP_INFO("AMF0 数据: {}", *first_str);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  handleAudioData —— 接收音频数据
+// ═══════════════════════════════════════════════════════════
+//
+//  RTMP 音频包的第 1 字节（Audio Tag Header）：
+//
+//  ┌────────┬─────────┬──────────┬───────────┐
+//  │ format │ rate    │ size     │ type      │
+//  │ 4 bit  │ 2 bit   │ 1 bit   │ 1 bit     │
+//  └────────┴─────────┴──────────┴───────────┘
+//
+//  format (高4位):
+//    10 = AAC (最常用)
+//    2  = MP3
+//    7  = G.711 A-law
+//    11 = Speex
+//
+//  AAC 的第 2 字节：
+//    0 = AAC Sequence Header（解码配置信息，必须先发这个）
+//    1 = AAC Raw（原始音频数据）
+//
 
 // ═══════════════════════════════════════════════════════════
 //  协议控制消息处理
