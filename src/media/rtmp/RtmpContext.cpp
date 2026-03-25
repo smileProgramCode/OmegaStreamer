@@ -128,15 +128,17 @@ void RtmpContext::handleMessage(RtmpMessagePtr msg)
             break;
         case kMsgTypeAMF0Data:
             RTMP_INFO("收到 AMF0 数据, len={}", msg->header.msg_len);
-            // TODO: @setDataFrame / onMetaData
+            handleAMF0Data(msg);
             break;
         case kMsgTypeAudio:
             RTMP_TRACE("收到音频数据, len={}, ts={}",
                    msg->header.msg_len, msg->header.timestamp);
+            handleAudioData(msg);
             break;
         case kMsgTypeVideo:
             RTMP_TRACE("收到视频数据, len={}, ts={}",
                    msg->header.msg_len, msg->header.timestamp);
+            handleVideoData(msg);
             break;
         default:
             RTMP_DEBUG("未处理的消息类型: {} ({})",
@@ -203,15 +205,20 @@ void RtmpContext::handleAMF0Command(RtmpMessagePtr msg) {
     } else if (*cmd_name == "createStream") {
         handleCreateStream(*txn_id);
     } else if (*cmd_name == "publish") {
-        // 第3个值:Null
+        //   publish 命令格式：
+        //   String "publish"
+        //   Number txn_id
+        //   Null
+        //   String stream_name   (如 "test")
+        //   String stream_type   (如 "live")
         decoder.Decode();
-        // 第4个值：流名称（string）
         AMF0Value name_val = decoder.Decode();
-        auto *stream_name = std::get_if<std::string>(&name_val);
-        if (stream_name) {
-            RTMP_INFO("publish: stream={}", *stream_name);
-        }
-        // TODO: 第5课实现publish逻辑
+        AMF0Value type_val = decoder.Decode();
+        auto *name = std::get_if<std::string>(&name_val);
+        auto *type = std::get_if<std::string>(&type_val);
+        handlePublish(*txn_id,
+                     name ? *name : "",
+                     type ? *type : "live");
     } else if (*cmd_name == "play") {
         decoder.Decode();
         AMF0Value name_val = decoder.Decode();
@@ -219,7 +226,7 @@ void RtmpContext::handleAMF0Command(RtmpMessagePtr msg) {
         if (stream_name) {
             RTMP_INFO("play: stream={}", *stream_name);
         }
-        // TODO: 第5课实现play逻辑
+        handlePlay(*txn_id, stream_name ? *stream_name : "");
     } else if (*cmd_name == "deleteStream") {
         RTMP_INFO("deleteStream");
     } else if (*cmd_name == "FCPublish" || *cmd_name == "releaseStream") {
@@ -298,17 +305,17 @@ void RtmpContext::handleConnect(double txn_id, const std::string& app) {
 //
 
 void RtmpContext::handleCreateStream(double txn_id) {
-    uint32_t stream_id = m_next_stream_id++;
+    m_stream_id = m_next_stream_id++;
 
     AMF0Encoder enc;
     enc.EncodeString("_result");
     enc.EncodeNumber(txn_id);
     enc.EncodeNull();
-    enc.EncodeNumber(stream_id);
+    enc.EncodeNumber(m_stream_id);
 
     sendChunk(kChunkCsidCommand, kMsgTypeAMF0Command, 0,
         enc.Data().data(), enc.Size());
-    RTMP_INFO("已回复 _result (createstream, stream_id={})", stream_id);
+    RTMP_INFO("已回复 _result (createstream, stream_id={})", m_stream_id);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -352,7 +359,7 @@ void RtmpContext::handlePublish(double txn_id, const std::string& stream_name, c
 
     // 2. 发送 onStatus 确认推流
     sendOnStatus(m_stream_id, "status",
-                "Netstream.Publish.Start",
+                "NetStream.Publish.Start",
                 "Start publishing");
 }
 
@@ -462,6 +469,96 @@ void RtmpContext::handleAMF0Data(RtmpMessagePtr msg) {
 //    0 = AAC Sequence Header（解码配置信息，必须先发这个）
 //    1 = AAC Raw（原始音频数据）
 //
+
+void RtmpContext::handleAudioData(RtmpMessagePtr msg) {
+    m_audio_count++;
+
+    if (msg->payload.empty()) return;
+
+    uint8_t first_byte = static_cast<uint8_t>(msg->payload[0]);
+    uint8_t format = (first_byte >> 4) & 0x0F;
+
+    if (format == 10 && msg->payload.size() >= 2) {
+        uint8_t aac_type = static_cast<uint8_t>(msg->payload[1]);
+        if (aac_type == 0) {
+            RTMP_INFO("音频: AAC Sequence Header (解码配置)， len={}, ts={}", msg->header.msg_len, msg->header.timestamp);
+        } else {
+            if (m_audio_count % 100 == 0) {
+                RTMP_DEBUG("音频：AAC Raw, 已收 {} 包, ts={}", m_audio_count, msg->header.timestamp);
+            }
+        }
+    } else {
+        if (m_audio_count <= 5) {
+            RTMP_INFO("音频: format={}, len={}, ts={}", format, msg->header.msg_len, msg->header.timestamp);
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  handleVideoData —— 接收视频数据
+// ═══════════════════════════════════════════════════════════
+//
+//  RTMP 视频包的第 1 字节（Video Tag Header）：
+//
+//  ┌────────────┬──────────┐
+//  │ frame_type │ codec_id │
+//  │ 4 bit      │ 4 bit    │
+//  └────────────┴──────────┘
+//
+//  frame_type (高4位):
+//    1 = 关键帧 (keyframe)    ← 播放器必须从关键帧开始解码
+//    2 = 非关键帧 (inter frame)
+//
+//  codec_id (低4位):
+//    7 = H.264 (AVC)          ← 最常用
+//    12 = H.265 (HEVC)
+//
+//  H.264 的第 2 字节：
+//    0 = AVC Sequence Header（SPS/PPS，解码配置信息）
+//    1 = AVC NALU（实际视频帧数据）
+//    2 = AVC End of Sequence
+//
+
+void RtmpContext::handleVideoData(RtmpMessagePtr msg) {
+    m_video_count++;
+
+    if (msg->payload.empty()) return;
+
+    uint8_t first_byte = static_cast<uint8_t>(msg->payload[0]);
+    uint8_t frame_type = (first_byte >> 4) & 0x0F;
+    uint8_t codec_id = first_byte & 0x0F;
+
+    bool is_keyframe = (frame_type == 1);
+    if (is_keyframe) m_video_keyframe_count++;
+
+    // H.264 特殊处理
+    if ((codec_id == 7 || codec_id == 12) && msg->payload.size() >= 2) {
+        const char* codec_name = (codec_id == 7) ? "H.264" : "H.265";
+        uint8_t pkt_type = static_cast<uint8_t>(msg->payload[1]);
+        if (pkt_type == 0) {
+            RTMP_INFO("视频: {} Sequence Header, len={}, ts={}",
+                       codec_name, msg->header.msg_len, msg->header.timestamp);
+        } else if (pkt_type  == 1) {
+            if (is_keyframe) {
+                RTMP_INFO("视频: {} 关键帧, len={}, ts={}, keyframes={}",
+                           codec_name, msg->header.msg_len,
+                           msg->header.timestamp, m_video_keyframe_count);
+            } else {
+                if (m_video_count % 100 == 0) {
+                    RTMP_DEBUG("视频: {} 已收 {} 包 ({} 关键帧), ts={}",
+                                codec_name, m_video_count,
+                                m_video_keyframe_count, msg->header.timestamp);
+                }
+            }
+        }
+    } else {
+       if (m_video_count <= 5 || m_video_count % 100 == 0) {
+           RTMP_INFO("视频: codec={}, frame_type={}, len={}, ts={}",
+                       codec_id, frame_type,
+                       msg->header.msg_len, msg->header.timestamp);
+       }
+    }
+}
 
 // ═══════════════════════════════════════════════════════════
 //  协议控制消息处理
@@ -584,3 +681,67 @@ void RtmpContext::sendChunk(int csid, uint8_t msg_type,
     m_connection->Send(packet);
 }
 
+// ═══════════════════════════════════════════════════════════
+//  sendOnStatus —— 发送 onStatus 命令
+// ═══════════════════════════════════════════════════════════
+//
+//  onStatus 是服务端发给客户端的状态通知：
+//
+//  格式：
+//    AMF0 String  "onStatus"
+//    AMF0 Number  0           (txn_id = 0，因为不需要客户端回复)
+//    AMF0 Null
+//    AMF0 Object {
+//        "level":       "status" 或 "error",
+//        "code":        "NetStream.Publish.Start" 等,
+//        "description": "人类可读的描述"
+//    }
+//
+
+void RtmpContext::sendOnStatus(uint32_t stream_id,
+                                const std::string& level,
+                                const std::string& code,
+                                const std::string& description) {
+    AMF0Encoder enc;
+    enc.EncodeString("onStatus");
+    enc.EncodeNumber(0);
+    enc.EncodeNull();
+
+    enc.EncodeObjectStart();
+    enc.EncodeNamedString("level", level);
+    enc.EncodeNamedString("code", code);
+    enc.EncodeNamedString("description", description);
+    enc.EncodeObjectEnd();
+
+    sendChunk(kChunkCsidCommand, kMsgTypeAMF0Command, stream_id,
+                enc.Data().data(), enc.Size());
+
+    RTMP_INFO("发送 onStatus: {}", code);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  sendUserControlStreamBegin —— 发送 UserControl(StreamBegin)
+// ═══════════════════════════════════════════════════════════
+//
+//  UserControl 消息格式：
+//  ┌───────────────┬──────────────────┐
+//  │ event_type    │ event_data       │
+//  │ 2 字节(大端)   │ 4 字节(大端)     │
+//  └───────────────┴──────────────────┘
+//
+//  event_type = 0 → Stream Begin
+//  event_data = stream_id
+//
+//  这条消息告诉客户端："stream_id 对应的流已经准备好了"
+//
+
+void RtmpContext::sendUserControlStreamBegin(uint32_t stream_id) {
+    uint8_t payload[6];
+
+    BytesWriter::WriteUint16BE(payload, 0);
+    BytesWriter::WriteUint32BE(payload + 2, stream_id);
+
+    sendChunk(kChunkCsidControl, kMsgTypeUserControl, 0,
+                reinterpret_cast<const char *>(payload), 6);
+    RTMP_INFO("发送 UserControl(StreamBegin, stream_id={})", stream_id);
+}
