@@ -23,9 +23,36 @@
 
 #pragma once
 
+#include <unordered_map>
+#include <mutex>
+#include <string>
+
+#include "MediaSource.h"
+#include "base/Singleton.h"
+
 namespace tms {
     namespace media {
-        class MediaSourceMgr {
+        class MediaSourceMgr : base::NonCopyable {
+        public:
+            friend class base::Singleton<MediaSourceMgr>;
+            MediaSourcePtr Find(const std::string& app, const std::string& stream);
+
+            MediaSourcePtr FindOrCreate(const std::string& app, const std::string& stream);
+
+            void Remove(const std::string& app, const std::string& stream);
+
+            size_t Count() const;
+        private:
+            MediaSourceMgr() = default;
+            ~MediaSourceMgr() = default;
+            MediaSourceMgr(const MediaSourceMgr&) = delete;
+            MediaSourceMgr& operator=(const MediaSourceMgr&) = delete;
+
+            static std::string makeKey(const std::string& app, const std::string& stream);
+        private:
+            mutable std::mutex m_mutex;
+            std::unordered_map<std::string, MediaSourcePtr> m_sources;
         };
+        #define MediaSourceMgrIns tms::base::Singleton<tms::media::MediaSourceMgr>::Instance()
     } // media
 } // tms

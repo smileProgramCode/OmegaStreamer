@@ -8,6 +8,7 @@
 #include "media/base/BytesReader.h"
 #include "media/base/BytesWriter.h"
 #include "media/base/MediaLog.h"
+#include "media/base/MediaSourceMgr.h"
 
 using namespace tms::media;
 
@@ -63,14 +64,19 @@ void RtmpContext::onMessage(const TcpConnectionPtr& conn, MsgBuffer& buf)
     }
 }
 
-void RtmpContext::onWriteComplete(const TcpConnectionPtr& conn)
-{
+void RtmpContext::onWriteComplete(const TcpConnectionPtr& conn) {
     if (!m_handShake->IsDone()) m_handShake->WriteComplete();
 }
 
-void RtmpContext::onClose(const TcpConnectionPtr& conn)
-{
-    RTMP_INFO("connection closed, peer={}", conn->PeerAddr());
+void RtmpContext::onClose(const TcpConnectionPtr& conn) {
+    RTMP_INFO("连接关闭, peer={}, app={}, stream={},"
+              "audio={}, video={}, keyframes={}",
+              conn->PeerAddr(), m_app, m_stream_name,
+              m_audio_count, m_video_count, m_video_keyframe_count);
+    if (m_role == RtmpRole::kPublish && !m_app.empty() && !m_stream_name.empty()) {
+        MediaSourceMgrIns.Remove(m_app, m_stream_name);
+    }
+    m_media_source.reset();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -744,4 +750,16 @@ void RtmpContext::sendUserControlStreamBegin(uint32_t stream_id) {
     sendChunk(kChunkCsidControl, kMsgTypeUserControl, 0,
                 reinterpret_cast<const char *>(payload), 6);
     RTMP_INFO("发送 UserControl(StreamBegin, stream_id={})", stream_id);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  makePacket —— 从 RTMP 消息创建统一 Packet
+// ═══════════════════════════════════════════════════════════
+
+PacketPtr RtmpContext::makePacket(RtmpMessagePtr msg, PacketType type) {
+    auto pkt = std::make_shared<Packet>();
+    pkt->type = type;
+    pkt->timestamp = msg->header.timestamp;
+    pkt->payload = msg->payload;
+    return pkt;
 }

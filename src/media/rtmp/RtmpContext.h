@@ -7,6 +7,7 @@
 #include "RtmpChunkParse.h"
 #include "RtmpHeader.h"
 #include "network/net/TcpConnection.h"
+#include "media/base/MediaSource.h"
 #include <memory>
 
 namespace tms
@@ -69,6 +70,9 @@ namespace tms
             void sendOnStatus(uint32_t stream_id, const std::string& level,
                                 const std::string& code, const std::string& description);
             void sendUserControlStreamBegin(uint32_t stream_id);
+
+            // 从RTMP 消息创建Packet
+            PacketPtr makePacket(RtmpMessagePtr msg, PacketType type);
         private:
             TcpConnectionPtr m_connection;
             RtmpHandShakePtr m_handShake;
@@ -81,6 +85,8 @@ namespace tms
             uint32_t m_next_stream_id{1}; // 分配给 createStream 的 ID
             uint32_t m_stream_id{0};      // 当前使用的 stream_id
             RtmpRole m_role{RtmpRole::kUnknown};
+
+            MediaSourcePtr m_media_source;
 
             // ---统计信息---
             uint32_t m_audio_count{0};
