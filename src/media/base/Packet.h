@@ -41,7 +41,7 @@ namespace tms {
 
         struct Packet {
             PacketType   type{PacketType::kVideo};
-            CodecType     codecType{CodecType::kUnknown};
+            CodecType    codec{CodecType::kUnknown};
             uint32_t     timestamp{0};              // 毫秒
             bool         is_keyframe{false};        // 视频关键帧
             bool         is_seq_header{false};      // 编码配置包 (sps/pps 或 AAC Config)

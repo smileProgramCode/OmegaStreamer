@@ -419,38 +419,32 @@ void RtmpContext::handleAMF0Data(RtmpMessagePtr msg) {
     auto* first_str = std::get_if<std::string>(&first);
     if (!first_str) return;
 
-    if (*first_str == "@setDataFrame") {
-        // 跳过"onMetaData"字符串
-        AMF0Value second = decoder.Decode();
+    if (*first_str == "@setDataFrame" || *first_str == "@onMetaData") {
+        if (*first_str == "@onMetaData") {
+            decoder.Decode();
+        }
 
-        // 第三个值: 元数据 Object 或 ECMAArray
         AMF0Value meta_val = decoder.Decode();
-        auto* meta_obj = std::get_if<std::shared_ptr<AMF0Object>>(&meta_val);
+        auto *meta_obj = std::get_if<std::shared_ptr<AMF0Object>>(&meta_val);
         if (meta_obj && *meta_obj) {
             auto &meta = *meta_obj;
-            double width = meta->GetNumber("width");
-            double height = meta->GetNumber("height");
-            double fps = meta->GetNumber("framerate");
-            double video_bitrate = meta->GetNumber("videodatarate");
-            double audio_bitrate = meta->GetNumber("audiodatarate");
-            double sample_rate = meta->GetNumber("audiospmplerate");
-            std::string encoder = meta->GetString("encoder");
-
             RTMP_INFO("========================================");
-            RTMP_INFO("  元数据(onMetaData)");
+            RTMP_INFO("  元数据 (onMetaData)");
             RTMP_INFO("  视频: {}x{}, {}fps, {}kbps",
-                (int)width, (int)height, (int)fps, (int)video_bitrate);
+                       (int)meta->GetNumber("width"),
+                       (int)meta->GetNumber("height"),
+                       (int)meta->GetNumber("framerate"),
+                       (int)meta->GetNumber("videodatarate"));
             RTMP_INFO("  音频: {}Hz, {}kbps",
-                (int)sample_rate, (int)audio_bitrate);
-            if (!encoder.empty()) {
-                RTMP_INFO("  编码器: {}", encoder);
-            }
+                      (int)meta->GetNumber("audiosamplerate"),
+                      (int)meta->GetNumber("audiodatarate"));
             RTMP_INFO("========================================");
         }
-    } else if (*first_str == "onMetaData") {
-        RTMP_INFO("收到onMetaData (无@setDataFrame 前缀)");
-    } else {
-        RTMP_INFO("AMF0 数据: {}", *first_str);
+
+        if (m_media_source) {
+            auto pkt = makePacket(msg, PacketType::kMetaData);
+            m_media_source->SetMetaData(pkt);
+        }
     }
 }
 
@@ -484,19 +478,24 @@ void RtmpContext::handleAudioData(RtmpMessagePtr msg) {
     uint8_t first_byte = static_cast<uint8_t>(msg->payload[0]);
     uint8_t format = (first_byte >> 4) & 0x0F;
 
+    auto pkt = makePacket(msg, PacketType::kAudio);
+    pkt->codec = static_cast<CodecType>(format);
+
     if (format == 10 && msg->payload.size() >= 2) {
         uint8_t aac_type = static_cast<uint8_t>(msg->payload[1]);
         if (aac_type == 0) {
-            RTMP_INFO("音频: AAC Sequence Header (解码配置)， len={}, ts={}", msg->header.msg_len, msg->header.timestamp);
-        } else {
-            if (m_audio_count % 100 == 0) {
-                RTMP_DEBUG("音频：AAC Raw, 已收 {} 包, ts={}", m_audio_count, msg->header.timestamp);
+            pkt->is_seq_header = true;
+            RTMP_INFO("音频: AAC Sequence Header (解码配置)， len={}, ts={}",
+                        msg->header.msg_len, msg->header.timestamp);
+            if (m_media_source) {
+                m_media_source->SetAudioHeader(pkt);
             }
+            return;
         }
-    } else {
-        if (m_audio_count <= 5) {
-            RTMP_INFO("音频: format={}, len={}, ts={}", format, msg->header.msg_len, msg->header.timestamp);
-        }
+    }
+
+    if (m_media_source) {
+        m_media_source->OnAudio(pkt);
     }
 }
 
@@ -527,42 +526,49 @@ void RtmpContext::handleAudioData(RtmpMessagePtr msg) {
 
 void RtmpContext::handleVideoData(RtmpMessagePtr msg) {
     m_video_count++;
-
     if (msg->payload.empty()) return;
 
     uint8_t first_byte = static_cast<uint8_t>(msg->payload[0]);
     uint8_t frame_type = (first_byte >> 4) & 0x0F;
     uint8_t codec_id = first_byte & 0x0F;
 
-    bool is_keyframe = (frame_type == 1);
-    if (is_keyframe) m_video_keyframe_count++;
+    auto pkt = makePacket(msg, PacketType::kVideo);
+    pkt->codec = static_cast<CodecType>(codec_id);
+    pkt->is_keyframe = (frame_type == 1);
 
-    // H.264 特殊处理
+    if (pkt->is_keyframe) m_video_keyframe_count++;
+
+    // H.264 (7) 或 H.265 (12)
     if ((codec_id == 7 || codec_id == 12) && msg->payload.size() >= 2) {
         const char* codec_name = (codec_id == 7) ? "H.264" : "H.265";
         uint8_t pkt_type = static_cast<uint8_t>(msg->payload[1]);
         if (pkt_type == 0) {
+            // Sequence Header
+            pkt->is_seq_header = true;
             RTMP_INFO("视频: {} Sequence Header, len={}, ts={}",
                        codec_name, msg->header.msg_len, msg->header.timestamp);
-        } else if (pkt_type  == 1) {
-            if (is_keyframe) {
-                RTMP_INFO("视频: {} 关键帧, len={}, ts={}, keyframes={}",
-                           codec_name, msg->header.msg_len,
-                           msg->header.timestamp, m_video_keyframe_count);
-            } else {
-                if (m_video_count % 100 == 0) {
-                    RTMP_DEBUG("视频: {} 已收 {} 包 ({} 关键帧), ts={}",
-                                codec_name, m_video_count,
-                                m_video_keyframe_count, msg->header.timestamp);
-                }
+
+            // ★ 存入 MediaSource
+            if (m_media_source) {
+                m_media_source->SetVideoHeader(pkt);
             }
+
+            return;
         }
-    } else {
-       if (m_video_count <= 5 || m_video_count % 100 == 0) {
-           RTMP_INFO("视频: codec={}, frame_type={}, len={}, ts={}",
-                       codec_id, frame_type,
-                       msg->header.msg_len, msg->header.timestamp);
-       }
+
+        if (pkt->is_keyframe) {
+            RTMP_INFO("视频: {} 关键帧, len={}, ts={}, keyframes={}",
+                       codec_name, msg->header.msg_len,
+                       msg->header.timestamp, m_video_keyframe_count);
+        } else if (m_video_count % 100 == 0) {
+            RTMP_DEBUG("视频: {} 已收 {} 包 ({} 关键帧), ts={}",
+                       codec_name, m_video_count, m_video_keyframe_count,
+                       msg->header.timestamp);
+        }
+    }
+
+    if (m_media_source) {
+        m_media_source->OnVideo(pkt);
     }
 }
 
