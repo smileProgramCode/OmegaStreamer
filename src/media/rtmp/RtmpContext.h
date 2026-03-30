@@ -72,7 +72,7 @@ namespace tms
             void sendUserControlStreamBegin(uint32_t stream_id);
 
             // 从RTMP 消息创建Packet
-            PacketPtr makePacket(RtmpMessagePtr msg, PacketType type);
+            PacketPtr makePacket(RtmpMessagePtr msg, TrackType track);
         private:
             TcpConnectionPtr m_connection;
             RtmpHandShakePtr m_handShake;

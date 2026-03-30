@@ -24,13 +24,14 @@
 
 namespace tms {
     namespace media {
-        enum class PacketType : uint8_t {
-            kAudio    = 0,
-            kVideo    = 1,
-            kMetaData = 2,
+        enum class TrackType : uint8_t {
+            kUnknown  = 0,
+            kAudio    = 1,
+            kVideo    = 2,
+            kMetaData = 3,
         };
 
-        enum class CodecType : uint8_t {
+        enum class CodecId : uint8_t {
             kUnknown = 0,
             kH264    = 7,
             kHEVC    = 12,
@@ -40,11 +41,14 @@ namespace tms {
         };
 
         struct Packet {
-            PacketType   type{PacketType::kVideo};
-            CodecType    codec{CodecType::kUnknown};
+            TrackType    type{TrackType::kUnknown};
+            CodecId      codec{CodecId::kUnknown};
+            uint64_t     dts{0};
+            uint64_t     pts{0};
             uint32_t     timestamp{0};              // 毫秒
             bool         is_keyframe{false};        // 视频关键帧
-            bool         is_seq_header{false};      // 编码配置包 (sps/pps 或 AAC Config)
+            bool         is_config{false};          // 编码配置包 (sps/pps 或 AAC Config)
+            bool         is_metadata{false};         // onMetaData 这类数据包
             std::string  payload;                   // 原始rtmp包数据(含 tag header)
 
             // 包大小

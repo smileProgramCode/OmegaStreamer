@@ -442,7 +442,8 @@ void RtmpContext::handleAMF0Data(RtmpMessagePtr msg) {
         }
 
         if (m_media_source) {
-            auto pkt = makePacket(msg, PacketType::kMetaData);
+            auto pkt = makePacket(msg, TrackType::kMetaData);
+            pkt->is_metadata = true;
             m_media_source->SetMetaData(pkt);
         }
     }
@@ -478,13 +479,13 @@ void RtmpContext::handleAudioData(RtmpMessagePtr msg) {
     uint8_t first_byte = static_cast<uint8_t>(msg->payload[0]);
     uint8_t format = (first_byte >> 4) & 0x0F;
 
-    auto pkt = makePacket(msg, PacketType::kAudio);
-    pkt->codec = static_cast<CodecType>(format);
+    auto pkt = makePacket(msg, TrackType::kAudio);
+    pkt->codec = static_cast<CodecId>(format);
 
     if (format == 10 && msg->payload.size() >= 2) {
         uint8_t aac_type = static_cast<uint8_t>(msg->payload[1]);
         if (aac_type == 0) {
-            pkt->is_seq_header = true;
+            pkt->is_config = true;
             RTMP_INFO("音频: AAC Sequence Header (解码配置)， len={}, ts={}",
                         msg->header.msg_len, msg->header.timestamp);
             if (m_media_source) {
@@ -532,8 +533,8 @@ void RtmpContext::handleVideoData(RtmpMessagePtr msg) {
     uint8_t frame_type = (first_byte >> 4) & 0x0F;
     uint8_t codec_id = first_byte & 0x0F;
 
-    auto pkt = makePacket(msg, PacketType::kVideo);
-    pkt->codec = static_cast<CodecType>(codec_id);
+    auto pkt = makePacket(msg, TrackType::kVideo);
+    pkt->codec = static_cast<CodecId>(codec_id);
     pkt->is_keyframe = (frame_type == 1);
 
     if (pkt->is_keyframe) m_video_keyframe_count++;
@@ -544,7 +545,7 @@ void RtmpContext::handleVideoData(RtmpMessagePtr msg) {
         uint8_t pkt_type = static_cast<uint8_t>(msg->payload[1]);
         if (pkt_type == 0) {
             // Sequence Header
-            pkt->is_seq_header = true;
+            pkt->is_config = true;
             RTMP_INFO("视频: {} Sequence Header, len={}, ts={}",
                        codec_name, msg->header.msg_len, msg->header.timestamp);
 
@@ -762,9 +763,12 @@ void RtmpContext::sendUserControlStreamBegin(uint32_t stream_id) {
 //  makePacket —— 从 RTMP 消息创建统一 Packet
 // ═══════════════════════════════════════════════════════════
 
-PacketPtr RtmpContext::makePacket(RtmpMessagePtr msg, PacketType type) {
+PacketPtr RtmpContext::makePacket(RtmpMessagePtr msg, TrackType track) {
     auto pkt = std::make_shared<Packet>();
-    pkt->type = type;
+    pkt->type = track;
+
+    pkt->pts = msg->header.timestamp;
+    pkt->dts = msg->header.timestamp;
     pkt->timestamp = msg->header.timestamp;
     pkt->payload = msg->payload;
     return pkt;
